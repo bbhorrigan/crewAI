@@ -93,33 +93,27 @@ class CrewAgentExecutor(AgentExecutor):
         )
         return self._return(output, intermediate_steps, run_manager=run_manager)
 
-    def _iter_next_step(
-        self,
-        name_to_tool_map: Dict[str, BaseTool],
-        color_mapping: Dict[str, str],
-        inputs: Dict[str, str],
-        intermediate_steps: List[Tuple[AgentAction, str]],
-        run_manager: Optional[CallbackManagerForChainRun] = None,
-    ) -> Iterator[Union[AgentFinish, AgentAction, AgentStep]]:
-        """Take a single step in the thought-action-observation loop.
+def _iter_next_step(
+    self,
+    name_to_tool_map: Dict[str, BaseTool],
+    color_mapping: Dict[str, str],
+    inputs: Dict[str, str],
+    intermediate_steps: List[Tuple[AgentAction, str]],
+    run_manager: Optional[CallbackManagerForChainRun] = None,
+) -> Iterator[Union[AgentFinish, AgentAction, AgentStep]]:
+    try:
+        if self._should_force_answer():
+            yield from self._force_answer()
+            return
 
-        Override this to take control of how the agent makes and acts on choices.
-        """
-        try:
-            if self._should_force_answer():
-                error = self._i18n.errors("force_final_answer")
-                output = AgentAction("_Exception", error, error)
-                self.have_forced_answer = True
-                yield AgentStep(action=output, observation=error)
-                return
+        intermediate_steps = self._prepare_intermediate_steps(intermediate_steps)
+        output = self._plan_next_action(intermediate_steps, inputs, run_manager)
 
-            intermediate_steps = self._prepare_intermediate_steps(intermediate_steps)
-            # Call the LLM to see what to do.
-            output = self.agent.plan(
-                intermediate_steps,
-                callbacks=run_manager.get_child() if run_manager else None,
-                **inputs,
-            )
+        yield from self._process_agent_output(output, name_to_tool_map, color_mapping, run_manager)
+
+    except OutputParserException as e:
+        yield from self._handle_output_parser_exception(e, run_manager)
+
 
         except OutputParserException as e:
             if isinstance(self.handle_parsing_errors, bool):
