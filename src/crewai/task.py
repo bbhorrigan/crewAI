@@ -13,7 +13,7 @@ from crewai.utilities.pydantic_schema_parser import PydanticSchemaParser
 
 
 class Task(BaseModel):
-    """Class that represent a task to be executed."""
+    """Class that represents a task to be executed."""
 
     class Config:
         arbitrary_types_allowed = True
@@ -59,7 +59,7 @@ class Task(BaseModel):
         default=None,
     )
     output: Optional[TaskOutput] = Field(
-        description="Task output, it's final result after being executed", default=None
+        description="Task output, its final result after being executed", default=None
     )
     tools: Optional[List[Any]] = Field(
         default_factory=list,
@@ -74,7 +74,7 @@ class Task(BaseModel):
     _original_description: str | None = None
     _original_expected_output: str | None = None
 
-    def __init__(__pydantic_self__, **data):
+    def __init__(self, **data):
         config = data.pop("config", {})
         super().__init__(**config, **data)
 
@@ -124,37 +124,42 @@ class Task(BaseModel):
         Returns:
             Output of the task.
         """
+        try:
+            agent = agent or self.agent
+            if not agent:
+                raise Exception(
+                    f"The task '{self.description}' has no agent assigned, therefore it can't be executed directly and should be executed in a Crew using a specific process that supports that, like hierarchical."
+                )
 
-        agent = agent or self.agent
-        if not agent:
-            raise Exception(
-                f"The task '{self.description}' has no agent assigned, therefore it can't be executed directly and should be executed in a Crew using a specific process that support that, like hierarchical."
-            )
+            if self.context:
+                context = []
+                for task in self.context:
+                    if task.async_execution:
+                        task.thread.join()
+                    if task and task.output:
+                        context.append(task.output.raw_output)
+                context = "\n".join(context)
 
-        if self.context:
-            context = []
-            for task in self.context:
-                if task.async_execution:
-                    task.thread.join()
-                if task and task.output:
-                    context.append(task.output.raw_output)
-            context = "\n".join(context)
+            tools = tools or self.tools
 
-        tools = tools or self.tools
-
-        if self.async_execution:
-            self.thread = threading.Thread(
-                target=self._execute, args=(agent, self, context, tools)
-            )
-            self.thread.start()
-        else:
-            result = self._execute(
-                task=self,
-                agent=agent,
-                context=context,
-                tools=tools,
-            )
-            return result
+            if self.async_execution:
+                self.thread = threading.Thread(
+                    target=self._execute, args=(agent, self, context, tools)
+                )
+                self.thread.start()
+            else:
+                result = self._execute(
+                    task=self,
+                    agent=agent,
+                    context=context,
+                    tools=tools,
+                )
+                return result
+        except Exception as e:
+            # Handle and log the exception
+            print(f"Error occurred during task execution: {e}")
+            # Optionally, raise or propagate the exception further if necessary
+            raise
 
     def _execute(self, agent, task, context, tools):
         result = agent.execute_task(
@@ -175,39 +180,6 @@ class Task(BaseModel):
             self.callback(self.output)
 
         return exported_output
-
-    def prompt(self) -> str:
-        """Prompt the task.
-
-        Returns:
-            Prompt of the task.
-        """
-        tasks_slices = [self.description]
-
-        output = self.i18n.slice("expected_output").format(
-            expected_output=self.expected_output
-        )
-        tasks_slices = [self.description, output]
-        return "\n".join(tasks_slices)
-
-    def interpolate_inputs(self, inputs: Dict[str, Any]) -> None:
-        """Interpolate inputs into the task description and expected output."""
-        if self._original_description is None:
-            self._original_description = self.description
-        if self._original_expected_output is None:
-            self._original_expected_output = self.expected_output
-
-        if inputs:
-            self.description = self._original_description.format(**inputs)
-            self.expected_output = self._original_expected_output.format(**inputs)
-
-    def increment_tools_errors(self) -> None:
-        """Increment the tools errors counter."""
-        self.tools_errors += 1
-
-    def increment_delegations(self) -> None:
-        """Increment the delegations counter."""
-        self.delegations += 1
 
     def _export_output(self, result: str) -> Any:
         exported_result = result
